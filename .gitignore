@@ -1,0 +1,25 @@
+# Sensitive configuration
+config.json
+
+# Local Claude settings
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.env
+.venv
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
