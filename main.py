@@ -551,23 +551,6 @@ def run_claude_code_for_epic(project_dir: Path, epic_number: str, epic_title: st
                 print(stderr_output)
             if not stdout_lines:
                 print(f"[WARNING: No stdout received from Claude Code!]")
-            else:
-                print(f"[Stdout content - all lines:]")
-                for i, line in enumerate(stdout_lines):
-                    line_preview = repr(line[:300]) if len(line) > 300 else repr(line)
-                    print(f"  Line {i+1} (length={len(line)}): {line_preview}")
-
-            # Also try to parse the JSON if we got exactly 1 line
-            if len(stdout_lines) == 1 and stdout_lines[0].strip():
-                try:
-                    result_json = json.loads(stdout_lines[0])
-                    print(f"\n[Parsed result JSON - keys: {list(result_json.keys())}]")
-                    if "permission_denials" in result_json:
-                        print(f"[PERMISSION DENIALS: {result_json['permission_denials']}]")
-                    if "result" in result_json:
-                        print(f"[Result text: {result_json['result'][:200]}]")
-                except json.JSONDecodeError as e:
-                    print(f"[Could not parse as JSON: {e}]")
 
             # Check for timeout in recent output if we didn't catch it already
             if not timed_out:
@@ -1549,7 +1532,7 @@ def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: i
             return False
 
         # Step 2: Continue session with the develop-story command (with retry logic)
-        dev_prompt = f"*develop-story {story_path} - set the story from draft to in progress, use sub agents where you can, make sure you know whats in docs/architecture and docs/prd and docs/front-end-spec so you can reference where applicable. Please make sure that you mark each story task and sub task as complete when you complete it so that if you crash then we have proper context of what you have done. If you encounter any errors from previous implementations, fix them - do not ignore them as pre-existing issues."
+        dev_prompt = f"*develop-story {story_path} - set the story from draft to in progress, use sub agents where you can, make sure you know whats in docs/architecture and docs/prd and docs/front-end-spec so you can reference where applicable. Please make sure that you mark each story task and sub task as complete when you complete it so that if you crash then we have proper context of what you have done. CRITICAL: Before marking the story complete, you MUST run the TypeScript build (npm run build or tsc) and fix ALL TypeScript errors - not just the ones you think are related to your implementation. Do not dismiss any errors as 'pre-existing' - if the build has errors, fix them ALL. The story is not complete until the build passes with zero TypeScript errors."
 
         for attempt in range(max_retries):
             if attempt == 0:
@@ -1557,7 +1540,7 @@ def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: i
             else:
                 print(f"\n--- Retry attempt {attempt + 1}/{max_retries} (resuming session {session_id}) ---")
                 # On retry, use a continuation prompt
-                dev_prompt = f"Continue implementing {story_path}. Check which tasks are already marked [x] complete and continue with the remaining tasks. Use docs/architecture, docs/prd, and docs/front-end-spec as needed. Mark tasks complete as you finish them."
+                dev_prompt = f"Continue implementing {story_path}. Check which tasks are already marked [x] complete and continue with the remaining tasks. Use docs/architecture, docs/prd, and docs/front-end-spec as needed. Mark tasks complete as you finish them. CRITICAL: Before marking the story complete, run the TypeScript build and fix ALL errors - do not dismiss any as 'pre-existing'. The story is not complete until the build passes with zero TypeScript errors."
 
             cmd2 = f'claude -p "{dev_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --output-format stream-json --verbose'
 
@@ -1648,23 +1631,6 @@ def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: i
                 print(stderr_output)
             if not stdout_lines:
                 print(f"[WARNING: No stdout received from Claude Code!]")
-            else:
-                print(f"[Stdout content - all lines:]")
-                for i, line in enumerate(stdout_lines):
-                    line_preview = repr(line[:300]) if len(line) > 300 else repr(line)
-                    print(f"  Line {i+1} (length={len(line)}): {line_preview}")
-
-            # Also try to parse the JSON if we got exactly 1 line
-            if len(stdout_lines) == 1 and stdout_lines[0].strip():
-                try:
-                    result_json = json.loads(stdout_lines[0])
-                    print(f"\n[Parsed result JSON - keys: {list(result_json.keys())}]")
-                    if "permission_denials" in result_json:
-                        print(f"[PERMISSION DENIALS: {result_json['permission_denials']}]")
-                    if "result" in result_json:
-                        print(f"[Result text: {result_json['result'][:200]}]")
-                except json.JSONDecodeError as e:
-                    print(f"[Could not parse as JSON: {e}]")
 
             # Check for timeout in recent output if we didn't catch it already
             if not timed_out:
