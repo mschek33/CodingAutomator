@@ -188,9 +188,9 @@ Return ONLY the JSON array, no other text."""
 
 
 def run_codex_review_for_story(project_dir: Path, story_path: str) -> bool:
-    """Run Codex CLI to review implementation of a story."""
+    """Run Codex CLI to review implementation of a story using the BMAD Dev agent."""
 
-    print(f"\nRunning Codex review for: {story_path}")
+    print(f"\nRunning Codex Dev review for: {story_path}")
     print()
 
     original_dir = os.getcwd()
@@ -199,7 +199,29 @@ def run_codex_review_for_story(project_dir: Path, story_path: str) -> bool:
         os.chdir(str(project_dir))
         print(f"Working directory: {os.getcwd()}")
 
-        review_prompt = f"Review the implementation of the story at {story_path}. Read the story file to understand all tasks and acceptance criteria. Check that all tasks marked [x] are actually implemented in the codebase. Verify the code follows the patterns in docs/architecture. Check that unit tests exist and cover the implementation. Look for any bugs, missing error handling, or incomplete implementations. If you find issues, fix any bugs or incomplete implementations and add missing tests. IMPORTANT: Apply all changes directly to the files - do not just propose changes or ask for confirmation. Make the edits now. Report what you found and what you fixed."
+        # Use the BMAD Dev agent for code review
+        review_prompt = f"""Read .bmad-core/agents/dev.md and adopt the Developer role. Then review the implementation of the story at {story_path}, using the info in docs/architecture and docs/front-end-spec and docs/prd as appropriate.
+
+REVIEW CHECKLIST:
+1) Check EVERY task in the story (marked [x] or [ ]) - tasks marked as deferred, future, optional, or out of scope can be ignored
+2) For each task marked [x], verify it is ACTUALLY IMPLEMENTED in the codebase with working code (not just documented)
+3) If any task is marked [x] but NOT actually implemented, UNMARK it to [ ] and then IMPLEMENT IT NOW
+4) If any task is marked [ ] and should be implemented, IMPLEMENT IT NOW
+5) Check for any separate implementation notes files (like "implementation-notes.md") - if they exist, DELETE them and actually implement those tasks
+6) Verify all acceptance criteria are met by actual working code
+7) Check that the code follows patterns and standards in docs/architecture
+8) Verify unit tests exist and properly cover the implementation
+9) Verify integration tests are included where appropriate
+10) Check for any bugs, missing error handling, or incomplete implementations
+11) Fix any bugs, incomplete implementations, or missing tests directly
+
+CRITICAL: If you find tasks that are not implemented but marked as complete, you MUST:
+- Unmark them as incomplete [ ]
+- Actually implement them with working code
+- Then mark them complete [x]
+- Do NOT just report them or defer them
+
+Apply all changes directly to the files. Report what you found, what was missing, and what you implemented."""
 
         # Use subprocess.list2cmdline for Windows compatibility
         cmd = ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '--json', review_prompt]
@@ -277,9 +299,9 @@ def run_codex_review_for_story(project_dir: Path, story_path: str) -> bool:
 
 
 def run_codex_review_for_epic(project_dir: Path, epic_number: str, epic_title: str) -> bool:
-    """Run Codex CLI to review stories created for an epic."""
+    """Run Codex CLI to review stories created for an epic using the BMAD SM agent."""
 
-    print(f"\nRunning Codex review for Epic {epic_number}: {epic_title}")
+    print(f"\nRunning Codex SM review for Epic {epic_number}: {epic_title}")
     print()
 
     original_dir = os.getcwd()
@@ -288,7 +310,8 @@ def run_codex_review_for_epic(project_dir: Path, epic_number: str, epic_title: s
         os.chdir(str(project_dir))
         print(f"Working directory: {os.getcwd()}")
 
-        review_prompt = f"Review the stories created for epic {epic_number} ({epic_title}) in docs/stories. Check if any tasks or requirements from the epic definition in docs/prd have been missed. Compare against docs/architecture, docs/front-end-spec, and docs/prd for completeness. For each story file for epic {epic_number}: verify all acceptance criteria from the epic are covered, check that unit and integration testing tasks are included, identify any missing tasks or subtasks. IMPORTANT: Apply all changes directly to the story files - do not just propose changes or ask for confirmation. Make the edits now using file write operations. Report what was missing and what you added."
+        # Use the BMAD SM agent for structured story review
+        review_prompt = f"Read .bmad-core/agents/sm.md and adopt the Scrum Master role. Then review the stories created for epic {epic_number} ({epic_title}) in docs/stories, using the info in docs/architecture and docs/front-end-spec and docs/prd as appropriate. Check if any tasks or requirements from the epic definition have been missed. For each story file for epic {epic_number}: verify all acceptance criteria from the epic are covered, check that tasks are properly broken down, make sure to include unit and integration testing tasks in the stories, identify any missing tasks or subtasks. IMPORTANT: Apply all changes directly to the story files - do not just propose changes. Make the edits now. Report what was missing and what you added."
 
         # Use subprocess.list2cmdline for Windows compatibility
         cmd = ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '--json', review_prompt]
@@ -365,79 +388,225 @@ def run_codex_review_for_epic(project_dir: Path, epic_number: str, epic_title: s
         return False
 
 
-def run_claude_code_for_epic(project_dir: Path, epic_number: str, epic_title: str) -> bool:
-    """Run Claude Code as a subprocess to create stories from an epic using SM role."""
+def run_claude_code_for_epic(project_dir: Path, epic_number: str, epic_title: str, max_retries: int = 10) -> bool:
+    """Run Claude Code as a subprocess to create stories from an epic using SM role.
+
+    Includes retry logic for API timeouts with session resume capability.
+    """
 
     print(f"Running Claude Code for Epic {epic_number}: {epic_title}")
     print(f"Working directory: {project_dir}")
     print()
 
+    original_dir = os.getcwd()
+
     try:
         # Change to project directory
-        original_dir = os.getcwd()
         os.chdir(str(project_dir))
 
-        # Step 1: Load the SM (Scrum Master) role and get session ID
+        # Step 1: Load the SM (Scrum Master) role and get session ID (with retry logic)
         print("Step 1: Loading Scrum Master role...")
         init_prompt = "Read .bmad-core/agents/sm.md and adopt that scrum master role."
         cmd1 = f'claude -p "{init_prompt}" --allowedTools "Read" --output-format json'
 
-        result1 = subprocess.run(cmd1, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        session_id = None
+        for attempt in range(max_retries):
+            if attempt > 0:
+                print(f"\n--- Retry attempt {attempt + 1}/{max_retries} for role loading ---")
 
-        if result1.returncode != 0:
-            print(f"Error loading SM role: {result1.stderr}")
-            os.chdir(original_dir)
-            return False
-
-        # Extract session ID from JSON response
-        try:
-            response = json.loads(result1.stdout)
-            session_id = response.get("session_id")
-            print(f"Session ID: {session_id}")
-        except json.JSONDecodeError:
-            print("Could not parse session response")
-            os.chdir(original_dir)
-            return False
-
-        # Step 2: Continue session with the create stories command
-        print(f"\nStep 2: Creating stories for Epic {epic_number}...")
-        create_prompt = f"Create the stories for epic {epic_number} ({epic_title}), using the info in docs/architecture and docs/front-end-spec and docs/prd as appropriate. Use sub agents where you can. Make sure to include unit and integration testing in the stories."
-        cmd2 = f'claude -p "{create_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --output-format stream-json --verbose'
-
-        process = subprocess.Popen(
-            cmd2,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            encoding='utf-8',
-            errors='replace'
-        )
-
-        # Stream output line by line
-        for line in process.stdout:
             try:
-                data = json.loads(line)
-                if data.get("type") == "assistant":
-                    content = data.get("message", {}).get("content", [])
-                    for block in content:
-                        if block.get("type") == "text":
-                            print(block.get("text", ""), end="", flush=True)
-                elif data.get("type") == "result":
-                    print(f"\n\nResult: {data.get('result', 'Done')}")
-            except json.JSONDecodeError:
-                print(line, end="", flush=True)
+                result1 = subprocess.run(cmd1, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=600)
 
-        process.wait()
+                if result1.returncode != 0:
+                    error_text = result1.stderr or result1.stdout or ""
+                    if "timed out" in error_text.lower() or "timeout" in error_text.lower():
+                        print(f"[Timeout loading SM role. Will retry in 10 minutes...]")
+                        time.sleep(600)
+                        continue
+                    print(f"Error loading SM role: {result1.stderr}")
+                    os.chdir(original_dir)
+                    return False
+
+                # Check for timeout in output
+                output_text = result1.stdout or ""
+                if "timed out" in output_text.lower() or "request timed out" in output_text.lower():
+                    print(f"[Timeout in response. Will retry in 10 minutes...]")
+                    time.sleep(600)
+                    continue
+
+                # Extract session ID from JSON response
+                try:
+                    response = json.loads(result1.stdout)
+                    session_id = response.get("session_id")
+                    print(f"Session ID: {session_id}")
+                    break  # Success, exit retry loop
+                except json.JSONDecodeError:
+                    print("Could not parse session response, retrying...")
+                    time.sleep(600)
+                    continue
+
+            except subprocess.TimeoutExpired:
+                print(f"[Subprocess timeout loading role. Will retry in 10 minutes...]")
+                time.sleep(600)
+                continue
+
+        if not session_id:
+            print(f"Failed to load SM role after {max_retries} attempts")
+            os.chdir(original_dir)
+            return False
+
+        # Step 2: Continue session with the create stories command (with retry logic)
+        create_prompt = f"Create the stories for epic {epic_number} ({epic_title}), using the info in docs/architecture and docs/front-end-spec and docs/prd as appropriate. Use sub agents where you can. Make sure to include unit and integration testing in the stories."
+
+        for attempt in range(max_retries):
+            if attempt == 0:
+                print(f"\nStep 2: Creating stories for Epic {epic_number}...")
+            else:
+                print(f"\n--- Retry attempt {attempt + 1}/{max_retries} (resuming session {session_id}) ---")
+                # On retry, use a continuation prompt
+                create_prompt = f"Continue creating stories for epic {epic_number} ({epic_title}). Check which stories have already been created and continue from there."
+
+            cmd2 = f'claude -p "{create_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --output-format stream-json --verbose'
+
+            process = subprocess.Popen(
+                cmd2,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            timed_out = False
+            error_detected = False
+            completed_successfully = False
+            last_output = []
+            stdout_lines = []
+
+            # Stream output line by line
+            print("[Waiting for output from Claude Code...]")
+            for line in process.stdout:
+                stdout_lines.append(line)
+                # Keep track of recent output for error detection
+                last_output.append(line)
+                if len(last_output) > 10:
+                    last_output.pop(0)
+
+                try:
+                    data = json.loads(line)
+
+                    if data.get("type") == "assistant":
+                        content = data.get("message", {}).get("content", [])
+                        for block in content:
+                            if block.get("type") == "text":
+                                text = block.get("text", "")
+                                print(text, end="", flush=True)
+                    elif data.get("type") == "result":
+                        result_text = data.get('result', 'Done')
+                        print(f"\n\nResult: {result_text}")
+
+                        # Check for permission denials
+                        permission_denials = data.get("permission_denials", [])
+                        if permission_denials:
+                            print(f"\n\n⚠️ PERMISSION DENIALS DETECTED ({len(permission_denials)}):")
+                            for denial in permission_denials:
+                                tool_name = denial.get("tool_name", "unknown")
+                                tool_input = denial.get("tool_input", {})
+                                print(f"  - Tool: {tool_name}")
+                                print(f"    Input: {tool_input}")
+                            error_detected = True
+
+                        # Check for timeout in result
+                        if "timed out" in result_text.lower() or "timeout" in result_text.lower():
+                            timed_out = True
+                        elif result_text.lower() in ["done", "success", "complete", "completed"]:
+                            completed_successfully = True
+                    elif data.get("type") == "error":
+                        error_msg = data.get("error", {}).get("message", "")
+                        if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                            timed_out = True
+                            print(f"\n[Timeout detected: {error_msg}]")
+                        else:
+                            error_detected = True
+                            print(f"\n[Error: {error_msg}]")
+                except json.JSONDecodeError:
+                    # Check for timeout in raw output
+                    if "request timed out" in line.lower() or "timeout" in line.lower():
+                        timed_out = True
+                        print(f"\n[Timeout detected in output]")
+                    print(line, end="", flush=True)
+
+            process.wait()
+
+            # Read any remaining stderr
+            stderr_output = process.stderr.read() if process.stderr else ""
+
+            # Debug output - always show for debugging
+            print(f"\n[Process exited with code {process.returncode}]")
+            print(f"[Stdout lines received: {len(stdout_lines)}]")
+            if stderr_output:
+                print(f"[STDERR output:]")
+                print(stderr_output)
+            if not stdout_lines:
+                print(f"[WARNING: No stdout received from Claude Code!]")
+            else:
+                print(f"[Stdout content - all lines:]")
+                for i, line in enumerate(stdout_lines):
+                    line_preview = repr(line[:300]) if len(line) > 300 else repr(line)
+                    print(f"  Line {i+1} (length={len(line)}): {line_preview}")
+
+            # Also try to parse the JSON if we got exactly 1 line
+            if len(stdout_lines) == 1 and stdout_lines[0].strip():
+                try:
+                    result_json = json.loads(stdout_lines[0])
+                    print(f"\n[Parsed result JSON - keys: {list(result_json.keys())}]")
+                    if "permission_denials" in result_json:
+                        print(f"[PERMISSION DENIALS: {result_json['permission_denials']}]")
+                    if "result" in result_json:
+                        print(f"[Result text: {result_json['result'][:200]}]")
+                except json.JSONDecodeError as e:
+                    print(f"[Could not parse as JSON: {e}]")
+
+            # Check for timeout in recent output if we didn't catch it already
+            if not timed_out:
+                recent_text = " ".join(last_output).lower()
+                if "request timed out" in recent_text or "timed out" in recent_text:
+                    timed_out = True
+
+            # If completed successfully (either via exit code or result message), return True
+            if (process.returncode == 0 or completed_successfully) and not timed_out and not error_detected:
+                os.chdir(original_dir)
+                return True
+
+            # If timed out and have retries left, continue
+            if timed_out and attempt < max_retries - 1:
+                print(f"\n\n[API timeout detected. Will retry with session resume in 10 minutes...]")
+                time.sleep(600)  # 10 minute cooldown
+                continue
+
+            # If other error or out of retries
+            if timed_out:
+                print(f"\n\n[Max retries ({max_retries}) exceeded due to timeouts]")
+            elif error_detected:
+                print(f"\n\n[Claude Code encountered an error]")
+            else:
+                print(f"\n\n[Process exited with code {process.returncode}]")
+
+            break
 
         # Change back
         os.chdir(original_dir)
+        return False
 
-        return process.returncode == 0
-
+    except subprocess.TimeoutExpired:
+        print(f"\n[Subprocess timeout - Claude Code took too long to start]")
+        os.chdir(original_dir)
+        return False
     except Exception as e:
         print(f"Error running Claude Code: {e}")
+        os.chdir(original_dir)
         return False
 
 
@@ -898,6 +1067,19 @@ def main():
         base_url="https://openrouter.ai/api/v1"
     )
 
+    # Check for command line arguments or show menu
+    output_path = project_dir / "stories_status_report.xml"
+
+    print("Select operation mode:")
+    print("  1. Normal flow (analyze, create stories, implement)")
+    print("  2. Revalidate implemented stories")
+    print()
+    mode = input("Enter choice (1 or 2) [1]: ").strip() or "1"
+
+    if mode == "2":
+        run_revalidation(project_dir, client, model, output_path)
+        return
+
     # First, check if there are epics that still need stories created
     print("Checking for epics that need stories...")
     prd_files = find_prd_files(project_dir)
@@ -967,7 +1149,6 @@ def main():
     print()
 
     # Load existing report if it exists
-    output_path = project_dir / "stories_status_report.xml"
     existing_results = load_existing_report(output_path)
 
     # Process each story
@@ -1135,6 +1316,145 @@ def main():
     print("=" * 60)
 
 
+def revalidate_story_tasks(client: OpenAI, model: str, story_path: Path) -> dict:
+    """Use AI to validate if all non-deferred tasks in a story are complete."""
+    try:
+        with open(story_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        prompt = f"""Analyze this story file and check if all tasks are properly completed.
+
+Story content:
+{content}
+
+Rules:
+1. Tasks marked [x] are considered complete
+2. Tasks marked [ ] are considered incomplete
+3. Tasks that are marked as "deferred", "moved to future story", "out of scope", "future", "optional", or similar should be IGNORED
+4. Only consider tasks that are actual work items (not section headers)
+
+Analyze the story and determine:
+1. Are there any incomplete tasks (marked [ ]) that are NOT deferred?
+2. List any incomplete non-deferred tasks you find
+
+Respond in this exact JSON format:
+{{
+    "has_incomplete_tasks": true/false,
+    "incomplete_task_count": number,
+    "incomplete_tasks": ["task 1 description", "task 2 description"],
+    "reasoning": "brief explanation"
+}}"""
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You analyze project stories to validate task completion. Respond only with valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0,
+            max_tokens=1000
+        )
+
+        response_text = response.choices[0].message.content.strip()
+
+        # Extract JSON from response
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+
+        return {"has_incomplete_tasks": False, "incomplete_task_count": 0, "incomplete_tasks": [], "reasoning": "Could not parse response"}
+
+    except Exception as e:
+        print(f"    ERROR validating story: {e}")
+        return {"has_incomplete_tasks": False, "incomplete_task_count": 0, "incomplete_tasks": [], "reasoning": f"Error: {e}"}
+
+
+def run_revalidation(project_dir: Path, client: OpenAI, model: str, output_path: Path) -> None:
+    """Revalidate all implemented stories and reset incomplete ones."""
+    print()
+    print("=" * 60)
+    print("STORY REVALIDATION")
+    print("=" * 60)
+    print()
+
+    # Load existing report
+    existing_results = load_existing_report(output_path)
+
+    if not existing_results:
+        print("No existing report found. Run normal analysis first.")
+        return
+
+    # Find stories marked as implemented
+    implemented_stories = [
+        (filename, data) for filename, data in existing_results.items()
+        if data.get("implemented", False)
+    ]
+
+    if not implemented_stories:
+        print("No implemented stories found to revalidate.")
+        return
+
+    print(f"Found {len(implemented_stories)} implemented stories to revalidate")
+    print()
+
+    stories_to_reset = []
+    stories_dir = project_dir / "docs" / "stories"
+
+    for i, (filename, data) in enumerate(implemented_stories, 1):
+        story_path = stories_dir / filename
+        if not story_path.exists():
+            print(f"[{i}/{len(implemented_stories)}] SKIP (file not found): {filename}")
+            continue
+
+        print(f"[{i}/{len(implemented_stories)}] Validating: {filename}")
+
+        validation = revalidate_story_tasks(client, model, story_path)
+
+        if validation["has_incomplete_tasks"]:
+            print(f"    INCOMPLETE: {validation['incomplete_task_count']} task(s) not done")
+            for task in validation["incomplete_tasks"][:5]:  # Show up to 5 tasks
+                print(f"      - {task[:80]}...")
+            stories_to_reset.append(filename)
+        else:
+            print(f"    OK: All tasks complete or deferred")
+
+    print()
+    print("=" * 60)
+    print("REVALIDATION SUMMARY")
+    print("=" * 60)
+    print(f"Validated: {len(implemented_stories)} stories")
+    print(f"Incomplete: {len(stories_to_reset)} stories need re-implementation")
+    print()
+
+    if not stories_to_reset:
+        print("All implemented stories are properly complete!")
+        return
+
+    print("Stories to reset:")
+    for filename in stories_to_reset:
+        print(f"  - {filename}")
+
+    print()
+    response = input("Reset these stories to implemented=false? (y/n): ").strip().lower()
+    if response != 'y':
+        print("No changes made.")
+        return
+
+    # Update the report
+    stories_analysis = list(existing_results.values())
+    for story in stories_analysis:
+        if story["filename"] in stories_to_reset:
+            story["implemented"] = False
+            story["implemented_at"] = ""
+            story["dev_reviewed"] = False
+            story["dev_reviewed_at"] = ""
+            # Also reset the completion status so it gets re-analyzed
+            story["analysis"]["completion_status"] = "Incomplete"
+
+    generate_xml_report(stories_analysis, output_path)
+    print(f"\nReset {len(stories_to_reset)} stories. Run main.py again to re-implement them.")
+
+
 def remove_story_from_cache(output_path: Path, filename: str) -> None:
     """Remove a story from the XML cache so it gets re-analyzed."""
     if not output_path.exists():
@@ -1161,79 +1481,229 @@ def remove_story_from_cache(output_path: Path, filename: str) -> None:
         print(f"Warning: Could not update cache: {e}")
 
 
-def run_claude_code_for_story(project_dir: Path, story_path: str) -> bool:
-    """Run Claude Code as a subprocess to implement a story using two-step process."""
+def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: int = 10) -> bool:
+    """Run Claude Code as a subprocess to implement a story using two-step process.
+
+    Includes retry logic for API timeouts with session resume capability.
+    """
 
     print(f"Running Claude Code for: {story_path}")
     print(f"Working directory: {project_dir}")
     print()
 
+    original_dir = os.getcwd()
+
     try:
         # Change to project directory
-        original_dir = os.getcwd()
         os.chdir(str(project_dir))
 
-        # Step 1: Load the dev role and get session ID
+        # Step 1: Load the dev role and get session ID (with retry logic)
         print("Step 1: Loading developer role...")
         init_prompt = "Read .bmad-core/agents/dev.md and adopt that developer role."
         cmd1 = f'claude -p "{init_prompt}" --allowedTools "Read" --output-format json'
 
-        result1 = subprocess.run(cmd1, shell=True, capture_output=True, text=True)
+        session_id = None
+        for attempt in range(max_retries):
+            if attempt > 0:
+                print(f"\n--- Retry attempt {attempt + 1}/{max_retries} for role loading ---")
 
-        if result1.returncode != 0:
-            print(f"Error loading dev role: {result1.stderr}")
-            os.chdir(original_dir)
-            return False
-
-        # Extract session ID from JSON response
-        try:
-            response = json.loads(result1.stdout)
-            session_id = response.get("session_id")
-            print(f"Session ID: {session_id}")
-        except json.JSONDecodeError:
-            print("Could not parse session response")
-            os.chdir(original_dir)
-            return False
-
-        # Step 2: Continue session with the develop-story command
-        print(f"\nStep 2: Running *develop-story on {story_path}...")
-        dev_prompt = f"*develop-story {story_path} - set the story from draft to in progress, use sub agents where you can, make sure you know whats in docs/architecture and docs/prd and docs/front-end-spec so you can reference where applicable. Please make sure that you mark each story task and sub task as complete when you complete it so that if you crash then we have proper context of what you have done. If you encounter any errors from previous implementations, fix them - do not ignore them as pre-existing issues."
-        cmd2 = f'claude -p "{dev_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --output-format stream-json --verbose'
-
-        process = subprocess.Popen(
-            cmd2,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            encoding='utf-8',
-            errors='replace'
-        )
-
-        # Stream output line by line
-        for line in process.stdout:
             try:
-                data = json.loads(line)
-                if data.get("type") == "assistant":
-                    content = data.get("message", {}).get("content", [])
-                    for block in content:
-                        if block.get("type") == "text":
-                            print(block.get("text", ""), end="", flush=True)
-                elif data.get("type") == "result":
-                    print(f"\n\nResult: {data.get('result', 'Done')}")
-            except json.JSONDecodeError:
-                print(line, end="", flush=True)
+                result1 = subprocess.run(cmd1, shell=True, capture_output=True, text=True, timeout=600)
 
-        process.wait()
+                if result1.returncode != 0:
+                    error_text = result1.stderr or result1.stdout or ""
+                    if "timed out" in error_text.lower() or "timeout" in error_text.lower():
+                        print(f"[Timeout loading dev role. Will retry in 10 minutes...]")
+                        time.sleep(600)
+                        continue
+                    print(f"Error loading dev role: {result1.stderr}")
+                    os.chdir(original_dir)
+                    return False
+
+                # Check for timeout in output
+                output_text = result1.stdout or ""
+                if "timed out" in output_text.lower() or "request timed out" in output_text.lower():
+                    print(f"[Timeout in response. Will retry in 10 minutes...]")
+                    time.sleep(600)
+                    continue
+
+                # Extract session ID from JSON response
+                try:
+                    response = json.loads(result1.stdout)
+                    session_id = response.get("session_id")
+                    print(f"Session ID: {session_id}")
+                    break  # Success, exit retry loop
+                except json.JSONDecodeError:
+                    print("Could not parse session response, retrying...")
+                    time.sleep(600)
+                    continue
+
+            except subprocess.TimeoutExpired:
+                print(f"[Subprocess timeout loading role. Will retry in 10 minutes...]")
+                time.sleep(600)
+                continue
+
+        if not session_id:
+            print(f"Failed to load dev role after {max_retries} attempts")
+            os.chdir(original_dir)
+            return False
+
+        # Step 2: Continue session with the develop-story command (with retry logic)
+        dev_prompt = f"*develop-story {story_path} - set the story from draft to in progress, use sub agents where you can, make sure you know whats in docs/architecture and docs/prd and docs/front-end-spec so you can reference where applicable. Please make sure that you mark each story task and sub task as complete when you complete it so that if you crash then we have proper context of what you have done. If you encounter any errors from previous implementations, fix them - do not ignore them as pre-existing issues."
+
+        for attempt in range(max_retries):
+            if attempt == 0:
+                print(f"\nStep 2: Running *develop-story on {story_path}...")
+            else:
+                print(f"\n--- Retry attempt {attempt + 1}/{max_retries} (resuming session {session_id}) ---")
+                # On retry, use a continuation prompt
+                dev_prompt = f"Continue implementing {story_path}. Check which tasks are already marked [x] complete and continue with the remaining tasks. Use docs/architecture, docs/prd, and docs/front-end-spec as needed. Mark tasks complete as you finish them."
+
+            cmd2 = f'claude -p "{dev_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --output-format stream-json --verbose'
+
+            print(f"Running command: claude -p \"...\" --resume \"{session_id}\" --allowedTools \"Bash,Read,Edit,Write,Glob,Grep\" --output-format stream-json --verbose")
+            print(f"Prompt preview: {dev_prompt[:200]}...")
+            print()
+
+            process = subprocess.Popen(
+                cmd2,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            timed_out = False
+            error_detected = False
+            completed_successfully = False
+            last_output = []
+            stdout_lines = []
+
+            # Stream output line by line
+            print("[Waiting for output from Claude Code...]")
+            for line in process.stdout:
+                stdout_lines.append(line)
+                # Keep track of recent output for error detection
+                last_output.append(line)
+                if len(last_output) > 10:
+                    last_output.pop(0)
+
+                try:
+                    data = json.loads(line)
+
+                    if data.get("type") == "assistant":
+                        content = data.get("message", {}).get("content", [])
+                        for block in content:
+                            if block.get("type") == "text":
+                                text = block.get("text", "")
+                                print(text, end="", flush=True)
+                    elif data.get("type") == "result":
+                        result_text = data.get('result', 'Done')
+                        print(f"\n\nResult: {result_text}")
+
+                        # Check for permission denials
+                        permission_denials = data.get("permission_denials", [])
+                        if permission_denials:
+                            print(f"\n\n⚠️ PERMISSION DENIALS DETECTED ({len(permission_denials)}):")
+                            for denial in permission_denials:
+                                tool_name = denial.get("tool_name", "unknown")
+                                tool_input = denial.get("tool_input", {})
+                                print(f"  - Tool: {tool_name}")
+                                print(f"    Input: {tool_input}")
+                            error_detected = True
+
+                        # Check for timeout in result
+                        if "timed out" in result_text.lower() or "timeout" in result_text.lower():
+                            timed_out = True
+                        elif result_text.lower() in ["done", "success", "complete", "completed"]:
+                            completed_successfully = True
+                    elif data.get("type") == "error":
+                        error_msg = data.get("error", {}).get("message", "")
+                        if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                            timed_out = True
+                            print(f"\n[Timeout detected: {error_msg}]")
+                        else:
+                            error_detected = True
+                            print(f"\n[Error: {error_msg}]")
+                except json.JSONDecodeError:
+                    # Check for timeout in raw output
+                    if "request timed out" in line.lower() or "timeout" in line.lower():
+                        timed_out = True
+                        print(f"\n[Timeout detected in output]")
+                    print(line, end="", flush=True)
+
+            process.wait()
+
+            # Read any remaining stderr
+            stderr_output = process.stderr.read() if process.stderr else ""
+
+            # Debug output - always show for debugging
+            print(f"\n[Process exited with code {process.returncode}]")
+            print(f"[Stdout lines received: {len(stdout_lines)}]")
+            if stderr_output:
+                print(f"[STDERR output:]")
+                print(stderr_output)
+            if not stdout_lines:
+                print(f"[WARNING: No stdout received from Claude Code!]")
+            else:
+                print(f"[Stdout content - all lines:]")
+                for i, line in enumerate(stdout_lines):
+                    line_preview = repr(line[:300]) if len(line) > 300 else repr(line)
+                    print(f"  Line {i+1} (length={len(line)}): {line_preview}")
+
+            # Also try to parse the JSON if we got exactly 1 line
+            if len(stdout_lines) == 1 and stdout_lines[0].strip():
+                try:
+                    result_json = json.loads(stdout_lines[0])
+                    print(f"\n[Parsed result JSON - keys: {list(result_json.keys())}]")
+                    if "permission_denials" in result_json:
+                        print(f"[PERMISSION DENIALS: {result_json['permission_denials']}]")
+                    if "result" in result_json:
+                        print(f"[Result text: {result_json['result'][:200]}]")
+                except json.JSONDecodeError as e:
+                    print(f"[Could not parse as JSON: {e}]")
+
+            # Check for timeout in recent output if we didn't catch it already
+            if not timed_out:
+                recent_text = " ".join(last_output).lower()
+                if "request timed out" in recent_text or "timed out" in recent_text:
+                    timed_out = True
+
+            # If completed successfully (either via exit code or result message), return True
+            if (process.returncode == 0 or completed_successfully) and not timed_out and not error_detected:
+                os.chdir(original_dir)
+                return True
+
+            # If timed out and have retries left, continue
+            if timed_out and attempt < max_retries - 1:
+                print(f"\n\n[API timeout detected. Will retry with session resume in 10 minutes...]")
+                time.sleep(600)  # 10 minute cooldown
+                continue
+
+            # If other error or out of retries
+            if timed_out:
+                print(f"\n\n[Max retries ({max_retries}) exceeded due to timeouts]")
+            elif error_detected:
+                print(f"\n\n[Claude Code encountered an error]")
+            else:
+                print(f"\n\n[Process exited with code {process.returncode}]")
+
+            break
 
         # Change back
         os.chdir(original_dir)
+        return False
 
-        return process.returncode == 0
-
+    except subprocess.TimeoutExpired:
+        print(f"\n[Subprocess timeout - Claude Code took too long to start]")
+        os.chdir(original_dir)
+        return False
     except Exception as e:
         print(f"Error running Claude Code: {e}")
+        os.chdir(original_dir)
         return False
 
 
