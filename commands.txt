@@ -1,0 +1,7 @@
+@docs/stories/5.10.story.md set the story from draft to in progress, use sub agents where you can, make sure you know whats in @docs/architecture\ and @docs/prd\ and @docs/front-end-spec\ so you can reference where applicable. Please make sure that you mark each story task and sub task as complete when you complete it so that if you crash then we have proper context of what you've done
+
+can we create the next stories for epic 4, using the info in @docs/architecture\ and @docs/front-end-spec\ and @docs/prd\ as appropriate. Use sub agents where you can. Make sure to include unit and integration testing 
+
+can we run through all the stories one by one in @docs/stories/ set the story from draft to in progress, use sub agents where you can, make sure you know whats in @docs/architecture\ and @docs/prd\ and @docs/front-end-spec\ so you can reference where applicable. Please make sure that you mark each story task and sub task as complete when you complete it so that if you crash then we have proper context of what you've done.  We aren't using apache age anymore, nor DiskANN. We are using Falkor DB now for the knowledge graph and next auth for authentication
+
+can we create the stories for all the epics, using the info in @docs/architecture\ and @docs/front-end-spec\ and @docs/prd\ as appropriate. Use sub agents where you can   
