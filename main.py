@@ -466,7 +466,7 @@ def run_claude_code_for_epic(project_dir: Path, epic_number: str, epic_title: st
                 # On retry, use a continuation prompt
                 create_prompt = f"Continue creating stories for epic {epic_number} ({epic_title}). Check which stories have already been created and continue from there."
 
-            cmd2 = f'claude -p "{create_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --output-format stream-json --verbose'
+            cmd2 = f'claude -p "{create_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Skill" --output-format stream-json --verbose'
 
             process = subprocess.Popen(
                 cmd2,
@@ -1542,7 +1542,7 @@ def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: i
                 # On retry, use a continuation prompt
                 dev_prompt = f"Continue implementing {story_path}. Check which tasks are already marked [x] complete and continue with the remaining tasks. Use docs/architecture, docs/prd, and docs/front-end-spec as needed. Mark tasks complete as you finish them. CRITICAL: Before marking the story complete, run the TypeScript build and fix ALL errors - do not dismiss any as 'pre-existing'. The story is not complete until the build passes with zero TypeScript errors."
 
-            cmd2 = f'claude -p "{dev_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --output-format stream-json --verbose'
+            cmd2 = f'claude -p "{dev_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Skill" --output-format stream-json --verbose'
 
             print(f"Running command: claude -p \"...\" --resume \"{session_id}\" --allowedTools \"Bash,Read,Edit,Write,Glob,Grep\" --output-format stream-json --verbose")
             print(f"Prompt preview: {dev_prompt[:200]}...")
