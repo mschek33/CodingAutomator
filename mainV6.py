@@ -75,8 +75,8 @@ def natural_sort_key(path: Path) -> tuple:
 
 
 def find_stories(project_dir: Path) -> list[Path]:
-    """Find all story files in the docs/stories folder, sorted naturally."""
-    stories_dir = project_dir / "docs" / "stories"
+    """Find all story files in the docs/implementation-artifacts folder, sorted naturally."""
+    stories_dir = project_dir / "docs" / "implementation-artifacts"
 
     if not stories_dir.exists():
         print(f"Warning: Stories directory not found: {stories_dir}")
@@ -86,31 +86,31 @@ def find_stories(project_dir: Path) -> list[Path]:
     return story_files
 
 
-def find_prd_files(project_dir: Path) -> list[Path]:
-    """Find all markdown files in the docs/prd folder, sorted naturally."""
-    prd_dir = project_dir / "docs" / "prd"
+def find_epic_files(project_dir: Path) -> list[Path]:
+    """Find all markdown files in the docs/planning-artifacts/epics folder, sorted naturally."""
+    epics_dir = project_dir / "docs" / "planning-artifacts" / "epics"
 
-    if not prd_dir.exists():
-        print(f"Warning: PRD directory not found: {prd_dir}")
+    if not epics_dir.exists():
+        print(f"Warning: Epics directory not found: {epics_dir}")
         return []
 
-    prd_files = sorted(prd_dir.glob("*.md"), key=natural_sort_key)
-    return prd_files
+    epic_files = sorted(epics_dir.glob("*.md"), key=natural_sort_key)
+    return epic_files
 
 
-def detect_epic_list_file(client: OpenAI, model: str, prd_files: list[Path]) -> Path | None:
-    """Use AI to detect which PRD file contains the epic LIST (not details)."""
-    if not prd_files:
+def detect_epic_list_file(client: OpenAI, model: str, epic_files: list[Path]) -> Path | None:
+    """Use AI to detect which epic file contains the epic LIST (not details)."""
+    if not epic_files:
         return None
 
     # Build a list of filenames for the AI to analyze
-    file_list = "\n".join([f"- {f.name}" for f in prd_files])
+    file_list = "\n".join([f"- {f.name}" for f in epic_files])
 
-    prompt = f"""Analyze these PRD folder filenames and identify the ONE file that contains the epic LIST.
+    prompt = f"""Analyze these epic folder filenames and identify the ONE file that contains the epic LIST.
 This is the file that lists all epics/features at a high level (NOT the detailed epic descriptions).
-It might be named something like "epic-list.md", "epics.md", "5-epic-list.md", etc.
+It might be named something like "epic-list.md", "epics.md", "0-epic-list.md", etc.
 
-Files in docs/prd:
+Files in docs/planning-artifacts/epics:
 {file_list}
 
 Return ONLY the single filename that contains the epic list. If none found, return "NONE".
@@ -134,9 +134,9 @@ Do not include any other text or explanation."""
 
         # Find the matching file
         filename = response_text.strip().lstrip("- ")
-        for prd_file in prd_files:
-            if prd_file.name == filename:
-                return prd_file
+        for epic_file in epic_files:
+            if epic_file.name == filename:
+                return epic_file
 
         return None
 
@@ -145,52 +145,65 @@ Do not include any other text or explanation."""
         return None
 
 
-def extract_epics_from_list(client: OpenAI, model: str, epic_list_file: Path) -> list[dict]:
-    """Use AI to extract individual epics from the epic list file."""
-    try:
-        with open(epic_list_file, "r", encoding="utf-8") as f:
-            content = f.read()
+def extract_epics_from_files(epic_files: list[Path]) -> list[dict]:
+    """Extract epics directly from the epic files in the folder.
 
-        prompt = f"""Analyze this epic list file and extract each epic.
-For each epic, provide the epic number/ID and title.
+    Each epic file is expected to be named like: epic-1-name.md, epic-2-name.md, etc.
+    Files like epic-list.md, index.md, overview.md are skipped.
+    """
+    epics = []
 
-File content:
-{content[:8000]}
+    # Files to skip (index/list/overview files)
+    skip_names = {"epic-list", "index", "overview", "requirements-inventory"}
 
-Return a JSON array of objects with "number" and "title" fields. Example:
-[{{"number": "1", "title": "User Authentication"}}, {{"number": "2", "title": "Dashboard"}}]
+    for epic_file in epic_files:
+        filename = epic_file.stem  # Get filename without extension
 
-Return ONLY the JSON array, no other text."""
+        # Skip index/list files
+        if filename.lower() in skip_names:
+            continue
 
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You extract structured data from documents. Respond only with valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            max_tokens=2000
-        )
+        # Extract epic number from filename (e.g., "epic-1-user-auth" -> "1")
+        match = re.match(r'^epic-(\d+)', filename, re.IGNORECASE)
+        if match:
+            epic_number = match.group(1)
 
-        response_text = response.choices[0].message.content.strip()
+            # Try to extract title from file content or derive from filename
+            title = filename
+            try:
+                with open(epic_file, "r", encoding="utf-8") as f:
+                    first_lines = f.read(500)
+                    # Look for a markdown title
+                    title_match = re.search(r'^#\s+(.+)$', first_lines, re.MULTILINE)
+                    if title_match:
+                        title = title_match.group(1).strip()
+                    else:
+                        # Clean up filename as title (remove "epic-N-" prefix)
+                        title = re.sub(r'^epic-\d+-', '', filename, flags=re.IGNORECASE)
+                        title = title.replace("-", " ").replace("_", " ").title()
+            except Exception:
+                title = re.sub(r'^epic-\d+-', '', filename, flags=re.IGNORECASE)
+                title = title.replace("-", " ").replace("_", " ").title()
 
-        # Extract JSON from response
-        json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
-        if json_match:
-            epics = json.loads(json_match.group())
-            return epics
+            epics.append({
+                "number": epic_number,
+                "title": title
+            })
 
-        return []
+    # Sort by epic number
+    epics.sort(key=lambda x: int(x["number"]))
 
-    except Exception as e:
-        print(f"Error extracting epics: {e}")
-        return []
+    print(f"Found {len(epics)} epic files to process")
+    for epic in epics:
+        print(f"  Epic {epic['number']}: {epic['title']}")
+
+    return epics
 
 
 def run_codex_review_for_story(project_dir: Path, story_path: str) -> bool:
-    """Run Codex CLI to review implementation of a story using the BMAD Dev agent."""
+    """Run Codex CLI to review implementation of a story using the BMAD v6 code review command."""
 
-    print(f"\nRunning Codex Dev review for: {story_path}")
+    print(f"\nRunning Codex code review for: {story_path}")
     print()
 
     original_dir = os.getcwd()
@@ -199,8 +212,8 @@ def run_codex_review_for_story(project_dir: Path, story_path: str) -> bool:
         os.chdir(str(project_dir))
         print(f"Working directory: {os.getcwd()}")
 
-        # Use the BMAD Dev agent for code review
-        review_prompt = f"""Read .bmad-core/agents/dev.md and adopt the Developer role. Then review the implementation of the story at {story_path}, using the info in docs/architecture and docs/front-end-spec and docs/prd as appropriate.
+        # Use the BMAD v6 code review prompt
+        review_prompt = f"""Read .codex/prompts/bmad-bmm-code-review.md and follow those instructions. Then review the implementation of the story at {story_path}, using the info in docs/planning-artifacts/architecture/ and docs/planning-artifacts/prd/ and docs/planning-artifacts/ux-design-specification/ as appropriate.
 
 REVIEW CHECKLIST:
 1) Check EVERY task in the story (marked [x] or [ ]) - tasks marked as deferred, future, optional, or out of scope can be ignored
@@ -209,7 +222,7 @@ REVIEW CHECKLIST:
 4) If any task is marked [ ] and should be implemented, IMPLEMENT IT NOW
 5) Check for any separate implementation notes files (like "implementation-notes.md") - if they exist, DELETE them and actually implement those tasks
 6) Verify all acceptance criteria are met by actual working code
-7) Check that the code follows patterns and standards in docs/architecture
+7) Check that the code follows patterns and standards in docs/planning-artifacts/architecture/
 8) Verify unit tests exist and properly cover the implementation
 9) Verify integration tests are included where appropriate
 10) Check for any bugs, missing error handling, or incomplete implementations
@@ -299,9 +312,9 @@ Apply all changes directly to the files. Report what you found, what was missing
 
 
 def run_codex_review_for_epic(project_dir: Path, epic_number: str, epic_title: str) -> bool:
-    """Run Codex CLI to review stories created for an epic using the BMAD SM agent."""
+    """Run Codex CLI to review stories created for an epic using the BMAD v6 command."""
 
-    print(f"\nRunning Codex SM review for Epic {epic_number}: {epic_title}")
+    print(f"\nRunning Codex review for Epic {epic_number}: {epic_title}")
     print()
 
     original_dir = os.getcwd()
@@ -310,11 +323,12 @@ def run_codex_review_for_epic(project_dir: Path, epic_number: str, epic_title: s
         os.chdir(str(project_dir))
         print(f"Working directory: {os.getcwd()}")
 
-        # Use the BMAD SM agent for structured story review
-        review_prompt = f"Read .bmad-core/agents/sm.md and adopt the Scrum Master role. Then review the stories created for epic {epic_number} ({epic_title}) in docs/stories, using the info in docs/architecture and docs/front-end-spec and docs/prd as appropriate. Check if any tasks or requirements from the epic definition have been missed. For each story file for epic {epic_number}: verify all acceptance criteria from the epic are covered, check that tasks are properly broken down, make sure to include unit and integration testing tasks in the stories, identify any missing tasks or subtasks. IMPORTANT: Apply all changes directly to the story files - do not just propose changes. Make the edits now. Report what was missing and what you added."
+        # Use the BMAD v6 story creation prompt for structured story review
+        review_prompt = f"Read .codex/prompts/bmad-bmm-create-story.md and follow those instructions. Then review the stories created for epic {epic_number} ({epic_title}) in docs/implementation-artifacts, using the info in docs/planning-artifacts/architecture/ and docs/planning-artifacts/epics/ and docs/planning-artifacts/prd/ and docs/planning-artifacts/ux-design-specification/ as appropriate. Check if any tasks or requirements from the epic definition have been missed. For each story file for epic {epic_number}: verify all acceptance criteria from the epic are covered, check that tasks are properly broken down, make sure to include unit and integration testing tasks in the stories, identify any missing tasks or subtasks. IMPORTANT: Apply all changes directly to the story files - do not just propose changes. Make the edits now. Report what was missing and what you added."
 
         # Use subprocess.list2cmdline for Windows compatibility
-        cmd = ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '--json', review_prompt]
+        # Remove --json to see raw output for debugging
+        cmd = ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', review_prompt]
 
         print(f"Running: codex exec ...")
 
@@ -344,37 +358,25 @@ def run_codex_review_for_epic(project_dir: Path, epic_number: str, epic_title: s
                 errors='replace'
             )
 
-        # Stream output line by line
+        # Stream all output directly - no JSON parsing
+        output_lines = []
         for line in process.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                event_type = data.get("type", "")
-                # Handle various Codex event types
-                if event_type == "item.completed":
-                    item = data.get("item", {})
-                    item_type = item.get("type", "")
-                    if item_type == "agent_message":
-                        print(item.get("text", ""), flush=True)
-                    elif item_type == "reasoning":
-                        print(f"[Thinking] {item.get('text', '')}", flush=True)
-                elif event_type == "thread.started":
-                    print(f"[Started thread: {data.get('thread_id', 'unknown')}]", flush=True)
-                elif event_type == "turn.started":
-                    print("[Processing...]", flush=True)
-                elif event_type == "turn.completed":
-                    usage = data.get("usage", {})
-                    print(f"[Turn complete - tokens: {usage.get('input_tokens', 0)} in, {usage.get('output_tokens', 0)} out]", flush=True)
-            except json.JSONDecodeError:
-                # Print non-JSON output directly
-                print(line, flush=True)
+            print(line, end="", flush=True)
+            output_lines.append(line)
 
         process.wait()
         os.chdir(original_dir)
 
+        # Check if we got meaningful output (more than just error messages)
+        meaningful_output = len([l for l in output_lines if l.strip() and "ERROR" not in l]) > 2
+
         print(f"\nCodex exit code: {process.returncode}")
+        print(f"Output lines received: {len(output_lines)}")
+
+        if process.returncode == 0 and not meaningful_output:
+            print("WARNING: Codex returned success but produced no meaningful output!")
+            return False
+
         return process.returncode == 0
 
     except FileNotFoundError as e:
@@ -389,7 +391,7 @@ def run_codex_review_for_epic(project_dir: Path, epic_number: str, epic_title: s
 
 
 def run_claude_code_for_epic(project_dir: Path, epic_number: str, epic_title: str, max_retries: int = 10) -> bool:
-    """Run Claude Code as a subprocess to create stories from an epic using SM role.
+    """Run Claude Code as a subprocess to create stories from an epic using BMAD v6 command.
 
     Includes retry logic for API timeouts with session resume capability.
     """
@@ -404,9 +406,9 @@ def run_claude_code_for_epic(project_dir: Path, epic_number: str, epic_title: st
         # Change to project directory
         os.chdir(str(project_dir))
 
-        # Step 1: Load the SM (Scrum Master) role and get session ID (with retry logic)
-        print("Step 1: Loading Scrum Master role...")
-        init_prompt = "Read .bmad-core/agents/sm.md and adopt that scrum master role."
+        # Step 1: Load the BMAD story creation command and get session ID (with retry logic)
+        print("Step 1: Loading BMAD story creation command...")
+        init_prompt = "Read .claude/commands/bmad-bmm-create-story.md and follow those instructions."
         cmd1 = f'claude -p "{init_prompt}" --allowedTools "Read" --output-format json'
 
         session_id = None
@@ -456,7 +458,7 @@ def run_claude_code_for_epic(project_dir: Path, epic_number: str, epic_title: st
             return False
 
         # Step 2: Continue session with the create stories command (with retry logic)
-        create_prompt = f"Create the stories for epic {epic_number} ({epic_title}), using the info in docs/architecture and docs/front-end-spec and docs/prd as appropriate. Use sub agents where you can. Make sure to include unit and integration testing in the stories."
+        create_prompt = f"Create the stories for epic {epic_number} ({epic_title}), using the info in docs/planning-artifacts/architecture/ and docs/planning-artifacts/epics/ and docs/planning-artifacts/prd/ and docs/planning-artifacts/ux-design-specification/ as appropriate. Use sub agents where you can. Make sure to include unit and integration testing in the stories."
 
         for attempt in range(max_retries):
             if attempt == 0:
@@ -464,7 +466,7 @@ def run_claude_code_for_epic(project_dir: Path, epic_number: str, epic_title: st
             else:
                 print(f"\n--- Retry attempt {attempt + 1}/{max_retries} (resuming session {session_id}) ---")
                 # On retry, use a continuation prompt
-                create_prompt = f"Continue creating stories for epic {epic_number} ({epic_title}). Check which stories have already been created and continue from there."
+                create_prompt = f"Continue creating stories for epic {epic_number} ({epic_title}). Check which stories have already been created and continue from there. Reference docs/planning-artifacts/ as needed."
 
             cmd2 = f'claude -p "{create_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Skill" --output-format stream-json --verbose'
 
@@ -915,7 +917,7 @@ def generate_xml_report(stories_analysis: list, output_path: Path) -> None:
 def _run_story_creation(project_dir: Path, client: OpenAI, model: str, epics: list, creation_report_path: Path, creation_report: dict) -> None:
     """Run the story creation flow for epics."""
     # Check which epics already have stories
-    stories_dir = project_dir / "docs" / "stories"
+    stories_dir = project_dir / "docs" / "implementation-artifacts"
     existing_story_files = list(stories_dir.glob("*.md")) if stories_dir.exists() else []
 
     def epic_has_stories(epic_num: str) -> bool:
@@ -1065,21 +1067,19 @@ def main():
 
     # First, check if there are epics that still need stories created
     print("Checking for epics that need stories...")
-    prd_files = find_prd_files(project_dir)
+    epic_files = find_epic_files(project_dir)
 
-    if prd_files:
-        epic_list_file = detect_epic_list_file(client, model, prd_files)
+    if epic_files:
+        # Extract epics directly from the files in the epics folder
+        epics = extract_epics_from_files(epic_files)
 
-        if epic_list_file:
-            epics = extract_epics_from_list(client, model, epic_list_file)
-
-            if epics:
+        if epics:
                 # Load story creation report
                 creation_report_path = project_dir / "story_creation_report.xml"
                 creation_report = load_story_creation_report(creation_report_path)
 
                 # Check which epics already have stories
-                stories_dir = project_dir / "docs" / "stories"
+                stories_dir = project_dir / "docs" / "implementation-artifacts"
                 existing_story_files = list(stories_dir.glob("*.md")) if stories_dir.exists() else []
 
                 def epic_has_stories(epic_num: str) -> bool:
@@ -1125,7 +1125,7 @@ def main():
     story_files = find_stories(project_dir)
 
     if not story_files:
-        print("No story files found in docs/stories folder and no epics to process.")
+        print("No story files found in docs/implementation-artifacts folder and no epics to process.")
         sys.exit(0)
 
     print(f"Found {len(story_files)} story file(s)")
@@ -1235,7 +1235,7 @@ def main():
         print(f"IMPLEMENTING STORY {i}/{len(incomplete_stories)}: {story['filename']}")
         print("=" * 60)
 
-        story_path = f"docs/stories/{story['filename']}"
+        story_path = f"docs/implementation-artifacts/{story['filename']}"
         success = run_claude_code_for_story(project_dir, story_path)
 
         if success:
@@ -1264,7 +1264,7 @@ def main():
     all_stories_to_review = implemented_stories.copy()
     for s in needs_review_only:
         if not any(r["filename"] == s["filename"] for r in all_stories_to_review):
-            all_stories_to_review.append({"filename": s["filename"], "path": f"docs/stories/{s['filename']}"})
+            all_stories_to_review.append({"filename": s["filename"], "path": f"docs/implementation-artifacts/{s['filename']}"})
 
     # Run Codex review for all stories that need review
     if all_stories_to_review:
@@ -1381,7 +1381,7 @@ def run_revalidation(project_dir: Path, client: OpenAI, model: str, output_path:
     print()
 
     stories_to_reset = []
-    stories_dir = project_dir / "docs" / "stories"
+    stories_dir = project_dir / "docs" / "implementation-artifacts"
 
     for i, (filename, data) in enumerate(implemented_stories, 1):
         story_path = stories_dir / filename
@@ -1465,7 +1465,7 @@ def remove_story_from_cache(output_path: Path, filename: str) -> None:
 
 
 def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: int = 10) -> bool:
-    """Run Claude Code as a subprocess to implement a story using two-step process.
+    """Run Claude Code as a subprocess to implement a story using BMAD v6 command.
 
     Includes retry logic for API timeouts with session resume capability.
     """
@@ -1480,9 +1480,9 @@ def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: i
         # Change to project directory
         os.chdir(str(project_dir))
 
-        # Step 1: Load the dev role and get session ID (with retry logic)
-        print("Step 1: Loading developer role...")
-        init_prompt = "Read .bmad-core/agents/dev.md and adopt that developer role."
+        # Step 1: Load the BMAD dev story command and get session ID (with retry logic)
+        print("Step 1: Loading BMAD dev story command...")
+        init_prompt = "Read .claude/commands/bmad-bmm-dev-story.md and follow those instructions."
         cmd1 = f'claude -p "{init_prompt}" --allowedTools "Read" --output-format json'
 
         session_id = None
@@ -1532,7 +1532,7 @@ def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: i
             return False
 
         # Step 2: Continue session with the develop-story command (with retry logic)
-        dev_prompt = f"*develop-story {story_path} - set the story from draft to in progress, use sub agents where you can, make sure you know whats in docs/architecture and docs/prd and docs/front-end-spec so you can reference where applicable. Please make sure that you mark each story task and sub task as complete when you complete it so that if you crash then we have proper context of what you have done. CRITICAL: Before marking the story complete, you MUST run the TypeScript build (npm run build or tsc) and fix ALL TypeScript errors - not just the ones you think are related to your implementation. Do not dismiss any errors as 'pre-existing' - if the build has errors, fix them ALL. The story is not complete until the build passes with zero TypeScript errors."
+        dev_prompt = f"Implement the story at {story_path} - set the story from draft to in progress, use sub agents where you can, make sure you know whats in docs/planning-artifacts/architecture/ and docs/planning-artifacts/prd/ and docs/planning-artifacts/ux-design-specification/ so you can reference where applicable. Please make sure that you mark each story task and sub task as complete when you complete it so that if you crash then we have proper context of what you have done. CRITICAL: Before marking the story complete, you MUST run the TypeScript build (npm run build or tsc) and fix ALL TypeScript errors - not just the ones you think are related to your implementation. Do not dismiss any errors as 'pre-existing' - if the build has errors, fix them ALL. The story is not complete until the build passes with zero TypeScript errors."
 
         for attempt in range(max_retries):
             if attempt == 0:
@@ -1540,7 +1540,7 @@ def run_claude_code_for_story(project_dir: Path, story_path: str, max_retries: i
             else:
                 print(f"\n--- Retry attempt {attempt + 1}/{max_retries} (resuming session {session_id}) ---")
                 # On retry, use a continuation prompt
-                dev_prompt = f"Continue implementing {story_path}. Check which tasks are already marked [x] complete and continue with the remaining tasks. Use docs/architecture, docs/prd, and docs/front-end-spec as needed. Mark tasks complete as you finish them. CRITICAL: Before marking the story complete, run the TypeScript build and fix ALL errors - do not dismiss any as 'pre-existing'. The story is not complete until the build passes with zero TypeScript errors."
+                dev_prompt = f"Continue implementing {story_path}. Check which tasks are already marked [x] complete and continue with the remaining tasks. Use docs/planning-artifacts/ as needed. Mark tasks complete as you finish them. CRITICAL: Before marking the story complete, run the TypeScript build and fix ALL errors - do not dismiss any as 'pre-existing'. The story is not complete until the build passes with zero TypeScript errors."
 
             cmd2 = f'claude -p "{dev_prompt}" --resume "{session_id}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Skill" --output-format stream-json --verbose'
 
